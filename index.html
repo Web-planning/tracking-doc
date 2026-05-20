@@ -227,7 +227,7 @@ const GH_BRANCH='main';
 const GH_DATA_PATH='data.json';
 const GH_IMG_DIR='screenshots';
 const GH_RAW=`https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/`;
-const GH_API=`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/`;
+const GH_API=`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`;
 
 const seedData={
   tree:[{id:'home',name:'Home page',children:[
@@ -1117,7 +1117,7 @@ async function loadFromCloud(){
 
 async function fetchDataSha(){
   try{
-    const r=await fetch(GH_API+'contents/'+GH_DATA_PATH+'?ref='+GH_BRANCH,{
+    const r=await fetch(GH_API+'/contents/'+GH_DATA_PATH+'?ref='+GH_BRANCH,{
       headers:{'Authorization':'Bearer '+state.ghToken,'Accept':'application/vnd.github+json'}
     });
     if(r.ok){const j=await r.json();state.ghDataSha=j.sha||''}
@@ -1137,7 +1137,7 @@ async function saveToCloud(){
       branch:GH_BRANCH
     };
     if(state.ghDataSha)body.sha=state.ghDataSha;
-    const r=await fetch(GH_API+'contents/'+GH_DATA_PATH,{
+    const r=await fetch(GH_API+'/contents/'+GH_DATA_PATH,{
       method:'PUT',
       headers:{'Authorization':'Bearer '+state.ghToken,'Accept':'application/vnd.github+json','Content-Type':'application/json'},
       body:JSON.stringify(body)
@@ -1168,12 +1168,12 @@ async function uploadImage(dataUrl,filename){
     // 確認是否已存在（取得 sha）
     let sha='';
     try{
-      const chk=await fetch(GH_API+'contents/'+path+'?ref='+GH_BRANCH,{headers:{'Authorization':'Bearer '+state.ghToken}});
+      const chk=await fetch(GH_API+'/contents/'+path+'?ref='+GH_BRANCH,{headers:{'Authorization':'Bearer '+state.ghToken}});
       if(chk.ok){const j=await chk.json();sha=j.sha||''}
     }catch(e){}
     const body={message:`Upload screenshot ${filename}`,content:base64,branch:GH_BRANCH};
     if(sha)body.sha=sha;
-    const r=await fetch(GH_API+'contents/'+path,{
+    const r=await fetch(GH_API+'/contents/'+path,{
       method:'PUT',
       headers:{'Authorization':'Bearer '+state.ghToken,'Accept':'application/vnd.github+json','Content-Type':'application/json'},
       body:JSON.stringify(body)
@@ -1215,10 +1215,24 @@ function openSettingsModal(){
   document.getElementById('ghSave').onclick=async()=>{
     const tok=document.getElementById('ghTokenInput').value.trim();
     if(!tok){alert('請輸入 Token');return}
-    // 驗證 token
+    // 驗證 token：用 /user endpoint（最穩定，會回傳使用者資訊）
     try{
-      const r=await fetch(GH_API,{headers:{'Authorization':'Bearer '+tok}});
-      if(!r.ok)throw new Error('Token 驗證失敗 HTTP '+r.status+'（請確認 Token 有效且包含 repo 權限）');
+      const r=await fetch('https://api.github.com/user',{headers:{'Authorization':'Bearer '+tok,'Accept':'application/vnd.github+json'}});
+      if(!r.ok){
+        if(r.status===401)throw new Error('Token 無效或已過期，請重新申請');
+        throw new Error('Token 驗證失敗 HTTP '+r.status);
+      }
+      const userInfo=await r.json();
+      // 再確認對該 Repo 有寫入權限
+      const r2=await fetch(GH_API,{headers:{'Authorization':'Bearer '+tok,'Accept':'application/vnd.github+json'}});
+      if(!r2.ok){
+        if(r2.status===404)throw new Error(`找不到 Repo「${GH_OWNER}/${GH_REPO}」，請確認您已被加為 Collaborator`);
+        throw new Error('無法存取 Repo HTTP '+r2.status);
+      }
+      const repoInfo=await r2.json();
+      if(!repoInfo.permissions||!repoInfo.permissions.push){
+        throw new Error('此 Token 沒有 Repo 寫入權限，請申請時勾選 repo 範圍');
+      }
       state.ghToken=tok;
       localStorage.setItem(TOKEN_KEY,tok);
       closeModal();
@@ -1226,6 +1240,7 @@ function openSettingsModal(){
       setCloudStatus('synced');
       updateReadonlyBanner();
       render();
+      alert(`已連線成功！\n使用者：${userInfo.login}\nRepo：${repoInfo.full_name}`);
     }catch(e){alert(e.message)}
   };
   setTimeout(()=>document.getElementById('ghTokenInput').focus(),50);
